@@ -1,6 +1,7 @@
 import React, { useRef, useEffect, useState } from "react";
 import io from "socket.io-client";
 import { useReactMediaRecorder } from "react-media-recorder";
+import { useParams } from "react-router-dom";
 
 const Room = (props) => {
   const mySocketRef = useRef();
@@ -19,6 +20,7 @@ const Room = (props) => {
   const incomingCandidateRef = useRef([]);
   const { status, startRecording, stopRecording, mediaBlobUrl } =
     useReactMediaRecorder({ screen: false, audio: false, video: true });
+  const params = useParams();
 
   useEffect(() => {
     navigator.mediaDevices
@@ -30,7 +32,7 @@ const Room = (props) => {
         myWebcamVideoRef.current.srcObject = myWebcamStreamRef.current;
 
         mySocketRef.current = io.connect("/");
-        mySocketRef.current.emit("join room", props.match.params.roomID);
+        mySocketRef.current.emit("join room", params.roomID);
 
         mySocketRef.current.on("other user", (userID) => {
           remoteUserIdRef.current = userID;
@@ -213,7 +215,7 @@ const Room = (props) => {
 
   function endCall() {
     mySocketRef.current.emit("call-end", {
-      roomID: props.match.params.roomID,
+      roomID: params.roomID,
       otherUser: remoteUserIdRef.current,
     });
     handleCallEnd();
