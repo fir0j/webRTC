@@ -4,48 +4,56 @@ import { useReactMediaRecorder } from "react-media-recorder";
 import { useParams } from "react-router-dom";
 
 const Room = (props) => {
-  const mySocketRef = useRef();
+  const params = useParams();
+
+  const rtcPeerRef = useRef();
+  const socketRef = useRef();
   const remoteUserIdRef = useRef();
-  const myPeerConnectionRef = useRef();
-  const myWebcamStreamRef = useRef();
-  const myWebcamVideoRef = useRef();
+  const localWebcamStreamRef = useRef();
   const remoteWebcamStreamRef = useRef();
-  const remoteWebcamVideoRef = useRef();
-  // const senders = useRef([]);
+  const rtpSendersRef = useRef([]);
+
+  // html elements
+  const localWebcamVideoElemRef = useRef();
+  const remoteWebcamVideoElemRef = useRef();
 
   const [isCalling, setIsCalling] = useState(false);
   const [isGettingCall, setIsGettingCall] = useState(false);
   const [isCallReceived, setIsCallReceived] = useState(null);
   const [incomingPayload, setIncomingPayload] = useState(null);
   const incomingCandidateRef = useRef([]);
+
+  const [isAudioOn, setIsAudioOn] = useState(true);
+  const [isVideoOn, setIsVideoOn] = useState(true);
+
   const { status, startRecording, stopRecording, mediaBlobUrl } =
     useReactMediaRecorder({ screen: false, audio: false, video: true });
-  const params = useParams();
 
   useEffect(() => {
     navigator.mediaDevices
       .getUserMedia({ audio: true, video: true })
       .then((stream) => {
         // saving stream
-        myWebcamStreamRef.current = stream;
+        localWebcamStreamRef.current = stream;
         // attaching to video element
-        myWebcamVideoRef.current.srcObject = myWebcamStreamRef.current;
+        localWebcamVideoElemRef.current.srcObject =
+          localWebcamStreamRef.current;
 
-        mySocketRef.current = io.connect("/");
-        mySocketRef.current.emit("join room", params.roomID);
+        socketRef.current = io.connect("/");
+        socketRef.current.emit("join room", params.roomID);
 
-        mySocketRef.current.on("other user", (userID) => {
+        socketRef.current.on("other user", (userID) => {
           remoteUserIdRef.current = userID;
         });
 
-        mySocketRef.current.on("user joined", (userID) => {
+        socketRef.current.on("user joined", (userID) => {
           remoteUserIdRef.current = userID;
         });
 
-        mySocketRef.current.on("offer", handleReceiveCall);
-        mySocketRef.current.on("answer", handleAnswerCall);
-        mySocketRef.current.on("ice-candidate", handleNewICECandidateMsg);
-        mySocketRef.current.on("call-end", handleCallEnd);
+        socketRef.current.on("offer", handleReceiveCall);
+        socketRef.current.on("answer", handleAnswerCall);
+        socketRef.current.on("ice-candidate", handleNewICECandidateMsg);
+        socketRef.current.on("call-end", handleCallEnd);
       });
   }, []);
 
@@ -58,38 +66,36 @@ const Room = (props) => {
     setIsGettingCall(false);
     setIsCallReceived(true);
 
-    myPeerConnectionRef.current = createPeer();
-    console.log("handling receive call by peer", myPeerConnectionRef.current);
+    rtcPeerRef.current = createPeer();
+    console.log("handling receive call by peer", rtcPeerRef.current);
 
     const desc = new RTCSessionDescription(incomingPayload.sdp);
-    myPeerConnectionRef.current
+    rtcPeerRef.current
       .setRemoteDescription(desc)
       .then(() => {
-        myWebcamStreamRef.current
+        localWebcamStreamRef.current
           .getTracks()
           .forEach((track) =>
-            myPeerConnectionRef.current.addTrack(
-              track,
-              myWebcamStreamRef.current
-            )
+            rtcPeerRef.current.addTrack(track, localWebcamStreamRef.current)
           );
       })
       .then(() => {
-        return myPeerConnectionRef.current.createAnswer();
+        return rtcPeerRef.current.createAnswer();
       })
       .then((answer) => {
-        return myPeerConnectionRef.current.setLocalDescription(answer);
+        return rtcPeerRef.current.setLocalDescription(answer);
       })
       .then(() => {
         const payload = {
           calle: incomingPayload.caller,
-          caller: mySocketRef.current.id,
-          sdp: myPeerConnectionRef.current.localDescription,
+          caller: socketRef.current.id,
+          sdp: rtcPeerRef.current.localDescription,
         };
-        mySocketRef.current.emit("answer", payload);
+        socketRef.current.emit("answer", payload);
       });
+
     incomingCandidateRef.current.forEach((candidate) => {
-      myPeerConnectionRef.current
+      rtcPeerRef.current
         .addIceCandidate(candidate)
         .catch((e) => console.log(e));
     });
@@ -99,16 +105,14 @@ const Room = (props) => {
     setIsCallReceived(true);
     setIsCalling(false);
     const desc = new RTCSessionDescription(message.sdp);
-    myPeerConnectionRef.current
-      .setRemoteDescription(desc)
-      .catch((e) => console.log(e));
+    rtcPeerRef.current.setRemoteDescription(desc).catch((e) => console.log(e));
   }
 
   function handleNewICECandidateMsg(incoming) {
     console.log("handle NewICECandidate msg", incoming);
     const candidate = new RTCIceCandidate(incoming);
-    if (myPeerConnectionRef.current) {
-      myPeerConnectionRef.current
+    if (rtcPeerRef.current) {
+      rtcPeerRef.current
         .addIceCandidate(candidate)
         .catch((e) => console.log(e));
     } else {
@@ -140,18 +144,18 @@ const Room = (props) => {
 
   function handleNegotiationNeededEvent() {
     console.log("1. [webRTC layer] handleNegotiationNeededEvent");
-    myPeerConnectionRef.current
+    rtcPeerRef.current
       .createOffer()
       .then((offer) => {
-        return myPeerConnectionRef.current.setLocalDescription(offer);
+        return rtcPeerRef.current.setLocalDescription(offer);
       })
       .then(() => {
         const payload = {
           calle: remoteUserIdRef.current,
-          caller: mySocketRef.current.id,
-          sdp: myPeerConnectionRef.current.localDescription,
+          caller: socketRef.current.id,
+          sdp: rtcPeerRef.current.localDescription,
         };
-        mySocketRef.current.emit("offer", payload);
+        socketRef.current.emit("offer", payload);
       })
       .catch((e) => console.log(e));
   }
@@ -163,33 +167,28 @@ const Room = (props) => {
         calle: remoteUserIdRef.current,
         candidate: e.candidate,
       };
-      mySocketRef.current.emit("ice-candidate", payload);
+      socketRef.current.emit("ice-candidate", payload);
     }
   }
 
   function handleTrackEvent(e) {
     console.log("3. [webRTC layer] handleTrack Event");
     remoteWebcamStreamRef.current = e.streams[0];
-    remoteWebcamVideoRef.current.srcObject = remoteWebcamStreamRef.current;
+    remoteWebcamVideoElemRef.current.srcObject = remoteWebcamStreamRef.current;
   }
 
-  function callOtherUser() {
+  function callRemoteUser() {
     console.log("calling User");
-    myPeerConnectionRef.current = createPeer();
-    myWebcamStreamRef.current
-      .getTracks()
-      .forEach((track) =>
-        myPeerConnectionRef.current.addTrack(track, myWebcamStreamRef.current)
-      );
+    rtcPeerRef.current = createPeer();
 
-    // saving allMyTracks for screenshare usage
-    // myWebcamStreamRef.current
-    //   .getTracks()
-    //   .forEach((track) =>
-    //     senders.current.push(
-    //       myPeerConnectionRef.current.addTrack(track, myWebcamStreamRef.current)
-    //     )
-    //   );
+    localWebcamStreamRef.current.getTracks().forEach((track) => {
+      const rtpSender = rtcPeerRef.current.addTrack(
+        track,
+        localWebcamStreamRef.current
+      );
+      rtpSendersRef.current.push(rtpSender);
+    });
+
     setIsCalling(true);
   }
 
@@ -199,97 +198,98 @@ const Room = (props) => {
     setIsCalling(false);
     setIsGettingCall(false);
     setIsCallReceived(false);
-    myPeerConnectionRef.current = null;
+    rtcPeerRef.current = null;
     remoteUserIdRef.current = null;
 
     // reseting locals
-    myWebcamStreamRef.current.getTracks().forEach((track) => track.stop());
-    myWebcamStreamRef.current = null;
-    myWebcamVideoRef.current.srcObject = null;
+    localWebcamStreamRef.current.getTracks().forEach((track) => track.stop());
+    localWebcamStreamRef.current = null;
+    localWebcamVideoElemRef.current.srcObject = null;
 
     //resetting remotes
     remoteWebcamStreamRef.current.getTracks().forEach((track) => track.stop());
-    remoteWebcamVideoRef.current.srcObject = null;
-    remoteWebcamVideoRef.current = null;
+    remoteWebcamVideoElemRef.current.srcObject = null;
+    remoteWebcamVideoElemRef.current = null;
   }
 
   function endCall() {
-    mySocketRef.current.emit("call-end", {
+    socketRef.current.emit("call-end", {
       roomID: params.roomID,
       otherUser: remoteUserIdRef.current,
     });
     handleCallEnd();
   }
 
-  // function shareScreen() {
-  //   navigator.mediaDevices.getDisplayMedia({ cursor: true }).then((stream) => {
-  //     const screenTrack = stream.getTracks()[0];
-  //     senders.current
-  //       .find((sender) => sender.track.kind === "video")
-  //       .replaceTrack(screenTrack);
-  //     screenTrack.onended = function () {
-  //       senders.current
-  //         .find((sender) => sender.track.kind === "video")
-  //         .replaceTrack(myWebcamStreamRef.current.getTracks()[1]);
-  //     };
-  //   });
-  // }
+  function handleAudioBroadcast(event) {
+    console.log(event);
+    localWebcamStreamRef.current.getAudioTracks()[0].enabled = !isAudioOn;
+    setIsAudioOn((prev) => !prev);
+  }
 
-  // function downloadUrl(url, filename) {
-  //   let xhr = new XMLHttpRequest();
-  //   xhr.open("GET", url, true);
-  //   xhr.responseType = "blob";
-  //   xhr.onload = function (e) {
-  //     if (this.status == 200) {
-  //       const blob = this.response;
-  //       const a = document.createElement("a");
-  //       document.body.appendChild(a);
-  //       const blobUrl = window.URL.createObjectURL(blob);
-  //       a.href = blobUrl;
-  //       a.download = filename;
-  //       a.click();
-  //       setTimeout(() => {
-  //         window.URL.revokeObjectURL(blobUrl);
-  //         document.body.removeChild(a);
-  //       }, 0);
-  //     }
-  //   };
-  //   xhr.send();
-  // }
-  // const RecordView = () => (
-  //   <div>
-  //     <p>{status}</p>
-  //     <button onClick={startRecording}>Start Recording</button>
-  //     <button onClick={stopRecording}>Stop Recording</button>
-  //     {/* <video src={mediaBlobUrl} controls autoPlay loop /> */}
-  //     {/* <button onClick={() => downloadUrl(mediaBlobUrl, "file.mp4")}>
-  //       Download file
-  //     </button> */}
-  //     <a href={mediaBlobUrl} download="file.mp4">
-  //       download File
-  //     </a>
-  //   </div>
-  // );
+  function handleVideoBroadcast(event) {
+    localWebcamStreamRef.current.getVideoTracks()[0].enabled = !isVideoOn;
+    setIsVideoOn((prev) => !prev);
+  }
+
+  function shareScreen() {
+    navigator.mediaDevices.getDisplayMedia({ cursor: true }).then((stream) => {
+      const screenTrack = stream.getVideoTracks()[0];
+
+      rtpSendersRef.current
+        .find((sender) => sender.track.kind === "video")
+        .replaceTrack(screenTrack);
+
+      screenTrack.onended = function () {
+        rtpSendersRef.current
+          .find((sender) => sender.track.kind === "video")
+          .replaceTrack(localWebcamStreamRef.current.getTracks()[1]);
+      };
+    });
+  }
+
+  const RecordView = () => (
+    <div>
+      <p>{status}</p>
+      <button onClick={startRecording}>Start Recording</button>
+      <button onClick={stopRecording}>Stop Recording</button>
+      <a href={mediaBlobUrl} download="filefromTag">
+        download File
+      </a>
+    </div>
+  );
 
   return (
     <div>
       <video
         style={{ height: 500, width: 500 }}
         autoPlay
-        ref={myWebcamVideoRef}
+        ref={localWebcamVideoElemRef}
       />
+
+      <button onClick={handleAudioBroadcast}>
+        {isAudioOn ? " Turn off audio" : "Turn on audio"}
+      </button>
+      <button onClick={handleVideoBroadcast}>
+        {isVideoOn ? " Turn off video" : "Turn on video"}
+      </button>
+
       <video
         style={{ height: 500, width: 500 }}
         autoPlay
-        ref={remoteWebcamVideoRef}
+        ref={remoteWebcamVideoElemRef}
       />
-
+      <button onClick={handleAudioBroadcast}>
+        {isAudioOn ? " Turn off audio" : "Turn on audio"}
+      </button>
+      <button onClick={handleVideoBroadcast}>
+        {isVideoOn ? " Turn off video" : "Turn on video"}
+      </button>
       {isGettingCall || isCalling || isCallReceived ? (
         <div onClick={endCall}>
           <button>End Call</button>
         </div>
       ) : (
-        <div onClick={callOtherUser}>
+        <div onClick={callRemoteUser}>
           <button>Call</button>
         </div>
       )}
@@ -309,7 +309,7 @@ const Room = (props) => {
           <br /> {remoteUserIdRef.current}
         </div>
       )}
-      {/* <button onClick={shareScreen}>Share screen</button> */}
+      <button onClick={shareScreen}>Share screen</button>
     </div>
   );
 };
