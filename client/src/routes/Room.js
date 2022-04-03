@@ -11,7 +11,7 @@ const Room = (props) => {
   const remoteUserIdRef = useRef();
   const localWebcamStreamRef = useRef();
   const remoteWebcamStreamRef = useRef();
-  const rtpSendersRef = useRef([]);
+  const rtcRtpsenderRef = useRef();
 
   // html elements
   const localWebcamVideoElemRef = useRef();
@@ -181,13 +181,12 @@ const Room = (props) => {
     console.log("calling User");
     rtcPeerRef.current = createPeer();
 
-    localWebcamStreamRef.current.getTracks().forEach((track) => {
-      const rtpSender = rtcPeerRef.current.addTrack(
-        track,
-        localWebcamStreamRef.current
-      );
-      rtpSendersRef.current.push(rtpSender);
-    });
+    const tracks = localWebcamStreamRef.current.getTracks();
+    if (tracks.length) {
+      tracks.forEach((track) => {
+        rtcPeerRef.current.addTrack(track, localWebcamStreamRef.current);
+      });
+    }
 
     setIsCalling(true);
   }
@@ -232,19 +231,38 @@ const Room = (props) => {
   }
 
   function shareScreen() {
-    navigator.mediaDevices.getDisplayMedia({ cursor: true }).then((stream) => {
-      const screenTrack = stream.getVideoTracks()[0];
+    navigator.mediaDevices
+      .getDisplayMedia({
+        video: {
+          cursor: "always",
+        },
+        audio: {
+          echoCancellation: true,
+          noiseSuppression: true,
+          sampleRate: 44100,
+        },
+      })
+      .then((stream) => {
+        const screenTrack = stream.getVideoTracks()[0];
 
-      rtpSendersRef.current
-        .find((sender) => sender.track.kind === "video")
-        .replaceTrack(screenTrack);
+        rtcRtpsenderRef.current = rtcPeerRef.current
+          .getSenders()
+          .find((sender) => sender.track.kind === "video");
 
-      screenTrack.onended = function () {
-        rtpSendersRef.current
-          .find((sender) => sender.track.kind === "video")
-          .replaceTrack(localWebcamStreamRef.current.getTracks()[1]);
-      };
-    });
+        rtcRtpsenderRef.current.replaceTrack(screenTrack);
+
+        screenTrack.onended = function () {
+          rtcRtpsenderRef.current.replaceTrack(
+            localWebcamStreamRef.current.getTracks()[1]
+          );
+        };
+      });
+  }
+
+  function stopScreenShare() {
+    rtcRtpsenderRef.current.replaceTrack(
+      localWebcamStreamRef.current.getTracks()[1]
+    );
   }
 
   const RecordView = () => (
@@ -252,7 +270,7 @@ const Room = (props) => {
       <p>{status}</p>
       <button onClick={startRecording}>Start Recording</button>
       <button onClick={stopRecording}>Stop Recording</button>
-      <a href={mediaBlobUrl} download="filefromTag">
+      <a href={mediaBlobUrl} download="file">
         download File
       </a>
     </div>
@@ -310,6 +328,7 @@ const Room = (props) => {
         </div>
       )}
       <button onClick={shareScreen}>Share screen</button>
+      <button onClick={stopScreenShare}>Stop Share screen</button>
     </div>
   );
 };
