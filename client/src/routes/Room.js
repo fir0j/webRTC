@@ -2,6 +2,7 @@ import React, { useRef, useEffect, useState } from "react";
 import io from "socket.io-client";
 import { useReactMediaRecorder } from "react-media-recorder";
 import { useParams } from "react-router-dom";
+import { useScreenshot, createFileName } from "use-react-screenshot";
 
 const Room = (props) => {
   const params = useParams();
@@ -28,6 +29,23 @@ const Room = (props) => {
 
   const { status, startRecording, stopRecording, mediaBlobUrl } =
     useReactMediaRecorder({ screen: false, audio: false, video: true });
+  const [image, takeScreenShot] = useScreenshot({
+    type: "image/jpeg",
+    quality: 1.0,
+  });
+
+  const download = (
+    image,
+    { name = "kyc-screenshot", extension = "jpg" } = {}
+  ) => {
+    const a = document.createElement("a");
+    a.href = image;
+    a.download = createFileName(extension, name);
+    a.click();
+  };
+
+  const downloadScreenshot = () =>
+    takeScreenShot(remoteWebcamVideoElemRef.current).then(download);
 
   useEffect(() => {
     navigator.mediaDevices
@@ -174,6 +192,7 @@ const Room = (props) => {
   function handleTrackEvent(e) {
     console.log("3. [webRTC layer] handleTrack Event");
     remoteWebcamStreamRef.current = e.streams[0];
+    console.log(e.streams[0]);
     remoteWebcamVideoElemRef.current.srcObject = remoteWebcamStreamRef.current;
   }
 
@@ -329,6 +348,7 @@ const Room = (props) => {
       )}
       <button onClick={shareScreen}>Share screen</button>
       <button onClick={stopScreenShare}>Stop Share screen</button>
+      <button onClick={downloadScreenshot}>Download screenshot</button>
     </div>
   );
 };
