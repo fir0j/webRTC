@@ -3,6 +3,8 @@ import io from "socket.io-client";
 import { useReactMediaRecorder } from "react-media-recorder";
 import { useParams } from "react-router-dom";
 import { useScreenshot, createFileName } from "use-react-screenshot";
+import { useCamera } from "../hooks/useCamera";
+import { useDisplay } from "../hooks/useDisplay";
 
 const Room = (props) => {
   const params = useParams();
@@ -24,15 +26,35 @@ const Room = (props) => {
   const [incomingPayload, setIncomingPayload] = useState(null);
   const incomingCandidateRef = useRef([]);
 
-  const [isAudioOn, setIsAudioOn] = useState(true);
-  const [isVideoOn, setIsVideoOn] = useState(true);
-
   const { status, startRecording, stopRecording, mediaBlobUrl } =
-    useReactMediaRecorder({ screen: false, audio: false, video: true });
+    useReactMediaRecorder({ screen: false, audio: true, video: true });
   const [image, takeScreenShot] = useScreenshot({
     type: "image/jpeg",
     quality: 1.0,
   });
+  const {
+    cameraStream,
+    isCameraOn,
+    setIsCameraOn,
+    cameraPlaying,
+    setCameraPlaying,
+    isCameraAudioOn,
+    setIsCameraAudioOn,
+    isCameraVideoOn,
+    setIsCameraVideoOn,
+    cameraError,
+  } = useCamera(localWebcamVideoElemRef);
+
+  // const {
+  //   displayStream,
+  //   isDisplayInitialised,
+  //   turnOnDisplay,
+  //   isDisplayPlaying,
+  //   setIsDisplayPlaying,
+  //   isDisplayOn,
+  //   setIsDisplayOn,
+  //   displayError,
+  // } = useDisplay(remoteWebcamVideoElemRef);
 
   const download = (
     image,
@@ -48,32 +70,28 @@ const Room = (props) => {
     takeScreenShot(remoteWebcamVideoElemRef.current).then(download);
 
   useEffect(() => {
-    navigator.mediaDevices
-      .getUserMedia({ audio: true, video: true })
-      .then((stream) => {
-        // saving stream
-        localWebcamStreamRef.current = stream;
-        // attaching to video element
-        localWebcamVideoElemRef.current.srcObject =
-          localWebcamStreamRef.current;
+    if (!isCameraOn) return;
+    // saving cameraStream
+    // localWebcamStreamRef.current = cameraStream;
+    // attaching to video element
+    // localWebcamVideoElemRef.current.srcObject = cameraStream;
 
-        socketRef.current = io.connect("/");
-        socketRef.current.emit("join room", params.roomID);
+    socketRef.current = io.connect("/");
+    socketRef.current.emit("join room", params.roomID);
 
-        socketRef.current.on("other user", (userID) => {
-          remoteUserIdRef.current = userID;
-        });
+    socketRef.current.on("other user", (userID) => {
+      remoteUserIdRef.current = userID;
+    });
 
-        socketRef.current.on("user joined", (userID) => {
-          remoteUserIdRef.current = userID;
-        });
+    socketRef.current.on("user joined", (userID) => {
+      remoteUserIdRef.current = userID;
+    });
 
-        socketRef.current.on("offer", handleReceiveCall);
-        socketRef.current.on("answer", handleAnswerCall);
-        socketRef.current.on("ice-candidate", handleNewICECandidateMsg);
-        socketRef.current.on("call-end", handleCallEnd);
-      });
-  }, []);
+    socketRef.current.on("offer", handleReceiveCall);
+    socketRef.current.on("answer", handleAnswerCall);
+    socketRef.current.on("ice-candidate", handleNewICECandidateMsg);
+    socketRef.current.on("call-end", handleCallEnd);
+  }, [isCameraOn, cameraStream]);
 
   function handleReceiveCall(incoming) {
     setIncomingPayload(incoming);
@@ -91,11 +109,9 @@ const Room = (props) => {
     rtcPeerRef.current
       .setRemoteDescription(desc)
       .then(() => {
-        localWebcamStreamRef.current
+        cameraStream
           .getTracks()
-          .forEach((track) =>
-            rtcPeerRef.current.addTrack(track, localWebcamStreamRef.current)
-          );
+          .forEach((track) => rtcPeerRef.current.addTrack(track, cameraStream));
       })
       .then(() => {
         return rtcPeerRef.current.createAnswer();
@@ -200,10 +216,10 @@ const Room = (props) => {
     console.log("calling User");
     rtcPeerRef.current = createPeer();
 
-    const tracks = localWebcamStreamRef.current.getTracks();
+    const tracks = cameraStream.getTracks();
     if (tracks.length) {
       tracks.forEach((track) => {
-        rtcPeerRef.current.addTrack(track, localWebcamStreamRef.current);
+        rtcPeerRef.current.addTrack(track, cameraStream);
       });
     }
 
@@ -220,9 +236,7 @@ const Room = (props) => {
     remoteUserIdRef.current = null;
 
     // reseting locals
-    localWebcamStreamRef.current.getTracks().forEach((track) => track.stop());
-    localWebcamStreamRef.current = null;
-    localWebcamVideoElemRef.current.srcObject = null;
+    setIsCameraOn(false);
 
     //resetting remotes
     remoteWebcamStreamRef.current.getTracks().forEach((track) => track.stop());
@@ -236,17 +250,6 @@ const Room = (props) => {
       otherUser: remoteUserIdRef.current,
     });
     handleCallEnd();
-  }
-
-  function handleAudioBroadcast(event) {
-    console.log(event);
-    localWebcamStreamRef.current.getAudioTracks()[0].enabled = !isAudioOn;
-    setIsAudioOn((prev) => !prev);
-  }
-
-  function handleVideoBroadcast(event) {
-    localWebcamStreamRef.current.getVideoTracks()[0].enabled = !isVideoOn;
-    setIsVideoOn((prev) => !prev);
   }
 
   function shareScreen() {
@@ -271,17 +274,13 @@ const Room = (props) => {
         rtcRtpsenderRef.current.replaceTrack(screenTrack);
 
         screenTrack.onended = function () {
-          rtcRtpsenderRef.current.replaceTrack(
-            localWebcamStreamRef.current.getTracks()[1]
-          );
+          rtcRtpsenderRef.current.replaceTrack(cameraStream.getTracks()[1]);
         };
       });
   }
 
   function stopScreenShare() {
-    rtcRtpsenderRef.current.replaceTrack(
-      localWebcamStreamRef.current.getTracks()[1]
-    );
+    rtcRtpsenderRef.current.replaceTrack(cameraStream.getTracks()[1]);
   }
 
   const RecordView = () => (
@@ -303,11 +302,16 @@ const Room = (props) => {
         ref={localWebcamVideoElemRef}
       />
 
-      <button onClick={handleAudioBroadcast}>
-        {isAudioOn ? " Turn off audio" : "Turn on audio"}
+      <button onClick={() => setIsCameraOn(true)}>turn on Camera</button>
+
+      <button onClick={() => setCameraPlaying(!cameraPlaying)}>
+        play/pause Camera
       </button>
-      <button onClick={handleVideoBroadcast}>
-        {isVideoOn ? " Turn off video" : "Turn on video"}
+      <button onClick={() => setIsCameraAudioOn((prev) => !prev)}>
+        {isCameraAudioOn ? " Turn off audio" : "Turn on audio"}
+      </button>
+      <button onClick={() => setIsCameraVideoOn((prev) => !prev)}>
+        {isCameraVideoOn ? " Turn off video" : "Turn on video"}
       </button>
 
       <video
@@ -315,11 +319,11 @@ const Room = (props) => {
         autoPlay
         ref={remoteWebcamVideoElemRef}
       />
-      <button onClick={handleAudioBroadcast}>
-        {isAudioOn ? " Turn off audio" : "Turn on audio"}
+      <button onClick={() => setIsCameraAudioOn((prev) => !prev)}>
+        {isCameraAudioOn ? " Turn off audio" : "Turn on audio"}
       </button>
-      <button onClick={handleVideoBroadcast}>
-        {isVideoOn ? " Turn off video" : "Turn on video"}
+      <button onClick={() => setIsCameraVideoOn((prev) => !prev)}>
+        {isCameraVideoOn ? " Turn off video" : "Turn on video"}
       </button>
       {isGettingCall || isCalling || isCallReceived ? (
         <div onClick={endCall}>
@@ -349,6 +353,7 @@ const Room = (props) => {
       <button onClick={shareScreen}>Share screen</button>
       <button onClick={stopScreenShare}>Stop Share screen</button>
       <button onClick={downloadScreenshot}>Download screenshot</button>
+      <RecordView />
     </div>
   );
 };

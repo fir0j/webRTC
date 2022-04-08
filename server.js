@@ -22,14 +22,17 @@ io.on("connection", (socket) => {
   });
 
   socket.on("offer", (payload) => {
+    console.log("got offer");
     io.to(payload.calle).emit("offer", payload);
   });
 
   socket.on("answer", (payload) => {
+    console.log("got answer");
     io.to(payload.calle).emit("answer", payload);
   });
 
   socket.on("ice-candidate", (incoming) => {
+    console.log("got ice-candidate");
     io.to(incoming.calle).emit("ice-candidate", incoming.candidate);
   });
 
