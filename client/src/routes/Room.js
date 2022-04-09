@@ -3,8 +3,8 @@ import io from "socket.io-client";
 import { useReactMediaRecorder } from "react-media-recorder";
 import { useParams } from "react-router-dom";
 import { useScreenshot, createFileName } from "use-react-screenshot";
-import { useCamera } from "../hooks/useCamera";
-import { useDisplay } from "../hooks/useDisplay";
+import { useMedia } from "../hooks/useMedia";
+// import { useDisplay } from "../hooks/useDisplay";
 
 const Room = (props) => {
   const params = useParams();
@@ -28,10 +28,12 @@ const Room = (props) => {
 
   const { status, startRecording, stopRecording, mediaBlobUrl } =
     useReactMediaRecorder({ screen: false, audio: true, video: true });
+
   const [image, takeScreenShot] = useScreenshot({
     type: "image/jpeg",
     quality: 1.0,
   });
+
   const {
     cameraStream,
     isCameraOn,
@@ -43,18 +45,7 @@ const Room = (props) => {
     isCameraVideoOn,
     setIsCameraVideoOn,
     cameraError,
-  } = useCamera(localWebcamVideoElemRef);
-
-  // const {
-  //   displayStream,
-  //   isDisplayInitialised,
-  //   turnOnDisplay,
-  //   isDisplayPlaying,
-  //   setIsDisplayPlaying,
-  //   isDisplayOn,
-  //   setIsDisplayOn,
-  //   displayError,
-  // } = useDisplay(remoteWebcamVideoElemRef);
+  } = useMedia(localWebcamVideoElemRef, "camera");
 
   const download = (
     image,
@@ -70,12 +61,6 @@ const Room = (props) => {
     takeScreenShot(remoteWebcamVideoElemRef.current).then(download);
 
   useEffect(() => {
-    if (!isCameraOn) return;
-    // saving cameraStream
-    // localWebcamStreamRef.current = cameraStream;
-    // attaching to video element
-    // localWebcamVideoElemRef.current.srcObject = cameraStream;
-
     socketRef.current = io.connect("/");
     socketRef.current.emit("join room", params.roomID);
 
@@ -91,7 +76,7 @@ const Room = (props) => {
     socketRef.current.on("answer", handleAnswerCall);
     socketRef.current.on("ice-candidate", handleNewICECandidateMsg);
     socketRef.current.on("call-end", handleCallEnd);
-  }, [isCameraOn, cameraStream]);
+  }, []);
 
   function handleReceiveCall(incoming) {
     setIncomingPayload(incoming);
@@ -252,35 +237,31 @@ const Room = (props) => {
     handleCallEnd();
   }
 
-  function shareScreen() {
-    navigator.mediaDevices
-      .getDisplayMedia({
-        video: {
-          cursor: "always",
-        },
-        audio: {
-          echoCancellation: true,
-          noiseSuppression: true,
-          sampleRate: 44100,
-        },
-      })
-      .then((stream) => {
-        const screenTrack = stream.getVideoTracks()[0];
+  async function shareScreen() {
+    const displayStream = await navigator.mediaDevices.getDisplayMedia({
+      video: {
+        cursor: "always",
+      },
+      audio: {
+        echoCancellation: true,
+        noiseSuppression: true,
+        sampleRate: 44100,
+      },
+    });
 
-        rtcRtpsenderRef.current = rtcPeerRef.current
-          .getSenders()
-          .find((sender) => sender.track.kind === "video");
+    rtcRtpsenderRef.current = await rtcPeerRef.current
+      .getSenders()
+      .find((sender) => sender.track.kind === "video");
 
-        rtcRtpsenderRef.current.replaceTrack(screenTrack);
+    const displayTrack = displayStream.getVideoTracks()[0];
+    await rtcRtpsenderRef.current.replaceTrack(displayTrack);
 
-        screenTrack.onended = function () {
-          rtcRtpsenderRef.current.replaceTrack(cameraStream.getTracks()[1]);
-        };
-      });
+    displayTrack.onended = stopScreenShare;
   }
 
-  function stopScreenShare() {
-    rtcRtpsenderRef.current.replaceTrack(cameraStream.getTracks()[1]);
+  async function stopScreenShare() {
+    const cameraTrack = cameraStream.getVideoTracks()[0];
+    await rtcRtpsenderRef.current.replaceTrack(cameraTrack);
   }
 
   const RecordView = () => (
@@ -303,6 +284,7 @@ const Room = (props) => {
       />
 
       <button onClick={() => setIsCameraOn(true)}>turn on Camera</button>
+      <button onClick={() => setIsCameraOn(false)}>turn off Camera</button>
 
       <button onClick={() => setCameraPlaying(!cameraPlaying)}>
         play/pause Camera
