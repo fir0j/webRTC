@@ -14,7 +14,7 @@ const useCleanup = (val) => {
   }, []);
 };
 
-export const useMedia = (videoElemRef, type = "camera") => {
+export const useCamera = (videoElemRef) => {
   const [isCameraOn, setIsCameraOn] = useState(false);
   const [isCameraAudioOn, setIsCameraAudioOn] = useState(true);
   const [isCameraVideoOn, setIsCameraVideoOn] = useState(true);
@@ -40,31 +40,7 @@ export const useMedia = (videoElemRef, type = "camera") => {
           video: true,
         });
 
-      const getDisplayPermission = async () =>
-        await navigator.mediaDevices.getDisplayMedia({
-          video: {
-            cursor: "always",
-          },
-          audio: {
-            echoCancellation: true,
-            noiseSuppression: true,
-            sampleRate: 44100,
-          },
-        });
-
-      let permission = undefined;
-      if (type === "camera") {
-        permission = getCameraPermission();
-      } else if (type === "display") {
-        permission = getDisplayPermission();
-      } else {
-        setCameraError(
-          "Invalid/unsupported media type. Only camera and display are supported"
-        );
-        return;
-      }
-
-      permission
+      getCameraPermission()
         .then((cameraStream) => {
           setCameraStream(cameraStream);
           videoElemRef.current.srcObject = cameraStream;
@@ -86,13 +62,10 @@ export const useMedia = (videoElemRef, type = "camera") => {
 
   // handling video play pause
   useEffect(() => {
-    if (type === "display") return;
-    const videoElement = videoElemRef.current;
-
     if (cameraPlaying) {
-      videoElement.play();
+      videoElemRef.current.play();
     } else {
-      videoElement.pause();
+      videoElemRef.current.pause();
     }
   }, [cameraPlaying, videoElemRef.current]);
 
@@ -114,31 +87,16 @@ export const useMedia = (videoElemRef, type = "camera") => {
   // run only on unmount
   useCleanup(cameraStream);
 
-  if (type === "camera") {
-    return {
-      cameraStream,
-      isCameraOn,
-      setIsCameraOn,
-      cameraPlaying,
-      setCameraPlaying,
-      isCameraAudioOn,
-      setIsCameraAudioOn,
-      isCameraVideoOn,
-      setIsCameraVideoOn,
-      cameraError,
-    };
-  }
-
-  if (type === "display") {
-    return {
-      displayStream: cameraStream,
-      isDisplayOn: isCameraOn,
-      setIsDisplayOn: setIsCameraOn,
-      displayPlaying: cameraPlaying,
-      setDisplayPlaying: setCameraPlaying,
-      isDisplayVideoOn: isCameraVideoOn,
-      setIsDisplayVideoOn: setIsCameraVideoOn,
-      displayError: cameraError,
-    };
-  }
+  return {
+    cameraStream,
+    isCameraOn,
+    setIsCameraOn,
+    cameraPlaying,
+    setCameraPlaying,
+    isCameraAudioOn,
+    setIsCameraAudioOn,
+    isCameraVideoOn,
+    setIsCameraVideoOn,
+    cameraError,
+  };
 };

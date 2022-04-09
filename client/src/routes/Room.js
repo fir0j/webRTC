@@ -3,7 +3,7 @@ import io from "socket.io-client";
 import { useReactMediaRecorder } from "react-media-recorder";
 import { useParams } from "react-router-dom";
 import { useScreenshot, createFileName } from "use-react-screenshot";
-import { useMedia } from "../hooks/useMedia";
+import { useCamera } from "../hooks/useCamera";
 // import { useDisplay } from "../hooks/useDisplay";
 
 const Room = (props) => {
@@ -36,7 +36,6 @@ const Room = (props) => {
 
   const {
     cameraStream,
-    isCameraOn,
     setIsCameraOn,
     cameraPlaying,
     setCameraPlaying,
@@ -44,8 +43,7 @@ const Room = (props) => {
     setIsCameraAudioOn,
     isCameraVideoOn,
     setIsCameraVideoOn,
-    cameraError,
-  } = useMedia(localWebcamVideoElemRef, "camera");
+  } = useCamera(localWebcamVideoElemRef);
 
   const download = (
     image,
@@ -238,30 +236,39 @@ const Room = (props) => {
   }
 
   async function shareScreen() {
-    const displayStream = await navigator.mediaDevices.getDisplayMedia({
-      video: {
-        cursor: "always",
-      },
-      audio: {
-        echoCancellation: true,
-        noiseSuppression: true,
-        sampleRate: 44100,
-      },
-    });
+    try {
+      const displayStream = await navigator.mediaDevices.getDisplayMedia({
+        video: {
+          cursor: "always",
+        },
+        audio: {
+          echoCancellation: true,
+          noiseSuppression: true,
+          sampleRate: 44100,
+        },
+      });
 
-    rtcRtpsenderRef.current = await rtcPeerRef.current
-      .getSenders()
-      .find((sender) => sender.track.kind === "video");
+      rtcRtpsenderRef.current = await rtcPeerRef.current
+        .getSenders()
+        .find((sender) => sender.track.kind === "video");
 
-    const displayTrack = displayStream.getVideoTracks()[0];
-    await rtcRtpsenderRef.current.replaceTrack(displayTrack);
+      const displayTrack = displayStream.getVideoTracks()[0];
+      await rtcRtpsenderRef.current.replaceTrack(displayTrack);
 
-    displayTrack.onended = stopScreenShare;
+      // adding event listeners
+      displayTrack.onended = stopScreenShare;
+    } catch (err) {
+      console.log("Failed to share display screen", err);
+    }
   }
 
   async function stopScreenShare() {
-    const cameraTrack = cameraStream.getVideoTracks()[0];
-    await rtcRtpsenderRef.current.replaceTrack(cameraTrack);
+    try {
+      const cameraTrack = cameraStream.getVideoTracks()[0];
+      await rtcRtpsenderRef.current.replaceTrack(cameraTrack);
+    } catch (err) {
+      console.log("Failed to stop display screen", err);
+    }
   }
 
   const RecordView = () => (
