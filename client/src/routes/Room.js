@@ -4,12 +4,11 @@ import { useReactMediaRecorder } from "react-media-recorder";
 import { useParams } from "react-router-dom";
 import { useScreenshot, createFileName } from "use-react-screenshot";
 import { useCamera } from "../hooks/useCamera";
-// import { useDisplay } from "../hooks/useDisplay";
 
 const Room = (props) => {
   const params = useParams();
 
-  const rtcPeerRef = useRef();
+  const myPeerConnectionRef = useRef();
   const socketRef = useRef();
   const remoteUserIdRef = useRef();
   const localWebcamStreamRef = useRef();
@@ -73,7 +72,7 @@ const Room = (props) => {
     socketRef.current.on("offer", handleReceiveCall);
     socketRef.current.on("answer", handleAnswerCall);
     socketRef.current.on("ice-candidate", handleNewICECandidateMsg);
-    socketRef.current.on("call-end", handleCallEnd);
+    socketRef.current.on("call-end", handleCloseVideoCall);
   }, []);
 
   function handleReceiveCall(incoming) {
@@ -81,55 +80,58 @@ const Room = (props) => {
     setIsGettingCall(true);
   }
 
-  function recieveCall(incoming) {
+  async function recieveCall() {
     setIsGettingCall(false);
     setIsCallReceived(true);
 
-    rtcPeerRef.current = createPeer();
-    console.log("handling receive call by peer", rtcPeerRef.current);
+    myPeerConnectionRef.current = createPeer();
+    console.log("handling receive call by peer", myPeerConnectionRef.current);
 
-    const desc = new RTCSessionDescription(incomingPayload.sdp);
-    rtcPeerRef.current
-      .setRemoteDescription(desc)
-      .then(() => {
-        cameraStream
-          .getTracks()
-          .forEach((track) => rtcPeerRef.current.addTrack(track, cameraStream));
-      })
-      .then(() => {
-        return rtcPeerRef.current.createAnswer();
-      })
-      .then((answer) => {
-        return rtcPeerRef.current.setLocalDescription(answer);
-      })
-      .then(() => {
-        const payload = {
-          calle: incomingPayload.caller,
-          caller: socketRef.current.id,
-          sdp: rtcPeerRef.current.localDescription,
-        };
-        socketRef.current.emit("answer", payload);
-      });
+    const rtcSessionDesc = new RTCSessionDescription(incomingPayload.sdp);
+    await myPeerConnectionRef.current.setRemoteDescription(rtcSessionDesc); // acknowledging that other peer's sdp is received successfully.
 
-    incomingCandidateRef.current.forEach((candidate) => {
-      rtcPeerRef.current
+    // adding all local tracks of receiving peer to its current rtcConnection
+    const localTracks = await cameraStream.getTracks();
+    localTracks.forEach((track) =>
+      myPeerConnectionRef.current.addTrack(track, cameraStream)
+    );
+
+    const sdpAnswer = await myPeerConnectionRef.current.createAnswer();
+    await myPeerConnectionRef.current.setLocalDescription(sdpAnswer);
+
+    const payload = {
+      calle: incomingPayload.caller,
+      caller: socketRef.current.id,
+      sdp: myPeerConnectionRef.current.localDescription,
+    };
+    await socketRef.current.emit("answer", payload);
+    // after emitting answer, ICE layers start sending ice-candidates to the caller.
+
+    incomingCandidateRef.current.forEach((candidate) =>
+      myPeerConnectionRef.current
         .addIceCandidate(candidate)
-        .catch((e) => console.log(e));
-    });
+        .catch((e) => console.log(e))
+    );
   }
 
-  function handleAnswerCall(message) {
-    setIsCallReceived(true);
-    setIsCalling(false);
-    const desc = new RTCSessionDescription(message.sdp);
-    rtcPeerRef.current.setRemoteDescription(desc).catch((e) => console.log(e));
+  async function handleAnswerCall(message) {
+    try {
+      setIsCallReceived(true);
+      setIsCalling(false);
+      const rtcSessionDesc = new RTCSessionDescription(message.sdp);
+      // informing WebRTC layer of caller side about calle's session connection.
+      await myPeerConnectionRef.current.setRemoteDescription(rtcSessionDesc);
+      // now the call is connected.
+    } catch (err) {
+      console.log("error while handling answer", err);
+    }
   }
 
   function handleNewICECandidateMsg(incoming) {
     console.log("handle NewICECandidate msg", incoming);
     const candidate = new RTCIceCandidate(incoming);
-    if (rtcPeerRef.current) {
-      rtcPeerRef.current
+    if (myPeerConnectionRef.current) {
+      myPeerConnectionRef.current
         .addIceCandidate(candidate)
         .catch((e) => console.log(e));
     } else {
@@ -152,29 +154,49 @@ const Room = (props) => {
       ],
     });
 
+    // onnegotiationneeded is fired when tracks are added to the rtc connection
+    peer.ontrack = handleTrackEvent;
     peer.onnegotiationneeded = handleNegotiationNeededEvent;
     peer.onicecandidate = handleICECandidateEvent;
-    peer.ontrack = handleTrackEvent;
+    peer.oniceconnectionstatechange = handleICEConnectionStateChangeEvent;
+    peer.onicegatheringstatechange = handleICEGatheringStateChangeEvent;
+    peer.onsignalingstatechange = handleSignalingStateChangeEvent;
 
     return peer;
   }
 
-  function handleNegotiationNeededEvent() {
-    console.log("1. [webRTC layer] handleNegotiationNeededEvent");
-    rtcPeerRef.current
-      .createOffer()
-      .then((offer) => {
-        return rtcPeerRef.current.setLocalDescription(offer);
-      })
-      .then(() => {
-        const payload = {
-          calle: remoteUserIdRef.current,
-          caller: socketRef.current.id,
-          sdp: rtcPeerRef.current.localDescription,
-        };
-        socketRef.current.emit("offer", payload);
-      })
-      .catch((e) => console.log(e));
+  function handleTrackEvent(e) {
+    console.log("3. [webRTC layer] handleTrack Event");
+    remoteWebcamStreamRef.current = e.streams[0];
+    console.log(e.streams[0]);
+    remoteWebcamVideoElemRef.current.srcObject = remoteWebcamStreamRef.current;
+  }
+
+  // it is fired when tracks are added to the rtcConnection
+  async function handleNegotiationNeededEvent() {
+    try {
+      console.log("1. [webRTC layer] handleNegotiationNeededEvent");
+      const sdpOffer = await myPeerConnectionRef.current.createOffer();
+
+      // If the connection hasn't yet achieved the "stable" state,
+      // return to the caller. Another negotiationneeded event
+      // will be fired when the state stabilizes.
+      console.log(myPeerConnectionRef.current.signalingState);
+      if (myPeerConnectionRef.current.signalingState != "stable") {
+        console.log("-- The connection isn't stable yet; postponing...");
+        return;
+      }
+
+      await myPeerConnectionRef.current.setLocalDescription(sdpOffer); // setting localDescription
+      const payload = {
+        calle: remoteUserIdRef.current,
+        caller: socketRef.current.id,
+        sdp: myPeerConnectionRef.current.localDescription, // getting localDescription
+      };
+      await socketRef.current.emit("offer", payload);
+    } catch (err) {
+      console.log("Error in onNegotiationNeeded", err);
+    }
   }
 
   function handleICECandidateEvent(e) {
@@ -188,34 +210,135 @@ const Room = (props) => {
     }
   }
 
-  function handleTrackEvent(e) {
-    console.log("3. [webRTC layer] handleTrack Event");
-    remoteWebcamStreamRef.current = e.streams[0];
-    console.log(e.streams[0]);
-    remoteWebcamVideoElemRef.current.srcObject = remoteWebcamStreamRef.current;
+  // This will detect when the ICE connection is changed
+  //
+  // This is called when the state of the ICE agent changes.
+  function handleICEConnectionStateChangeEvent() {
+    switch (myPeerConnectionRef.current.iceConnectionState) {
+      case "new":
+        console.log(
+          "iceConnectionState (new): the ICE agent is waiting for remote candidates or gathering addresses."
+        );
+        break;
+      case "checking":
+        console.log(
+          "iceConnectionState (checking): the ICE agent has remote candidates, but it has not found a connection yet."
+        );
+        break;
+      case "connected":
+        console.log(
+          "iceConnectionState (connected): the ICE agent has found a usable connection, but is still checking more remote candidate for better connection."
+        );
+        break;
+      case "completed":
+        console.log(
+          "iceConnectionState (completed): the ICE agent has found a usable connection and stopped testing remote candidates."
+        );
+        break;
+      case "closed":
+        console.log("iceConnectionState (closed): the ICE agent is closed.");
+        break;
+      case "failed":
+        console.log(
+          "iceConnectionState (failed): the ICE agent has checked all the remote candidates but didn't find a match for at least one component."
+        );
+        break;
+      case "disconnected":
+        console.log(
+          "iceConnectionState (disconnected): at least one component is no longer alive."
+        );
+        closeVideoCall();
+        break;
+    }
+  }
+
+  // Set up a |signalingstatechange| event handler. This will detect when
+  // the signaling connection is closed.
+  //
+  // NOTE: This will actually move to the new RTCPeerConnectionState enum
+  // returned in the property RTCPeerConnection.connectionState when
+  // browsers catch up with the latest version of the specification!
+
+  function handleSignalingStateChangeEvent() {
+    switch (myPeerConnectionRef.current.signalingState) {
+      case "stable":
+        console.log(
+          "Signaling state (stable): The initial state. There is no SDP offer/answer exchange in progress."
+        );
+        break;
+      case "have-local-offer":
+        console.log(
+          "Signaling state (have-local-offer): the local side of the connection has locally applied a SDP offer."
+        );
+        break;
+      case "have-remote-offer":
+        console.log(
+          "Signaling state (have-remote-offer): the remote side of the connection has locally applied a SDP offer."
+        );
+        break;
+      case "have-local-pranswer":
+        console.log(
+          "Signaling state (have-local-pranswer): a remote SDP offer has been applied, and a SDP pranswer applied locally."
+        );
+        break;
+      case "have-remote-pranswer":
+        console.log(
+          "Signaling state (have-remote-pranswer): a local SDP has been applied, and a SDP pranswer applied remotely."
+        );
+        break;
+      case "closed":
+        console.log("Signaling state (closed): the ICE agent has been closed.");
+        closeVideoCall();
+        break;
+    }
+  }
+
+  // Handle the |icegatheringstatechange| event. This lets us know what the
+  // ICE engine is currently working on: new, gathering or complete.
+  // Note that the engine can alternate between "gathering" and "complete" repeatedly as needs and
+  // circumstances change.
+  //
+  // We don't need to do anything when this happens, but we log it to the
+  // console so you can see what's going on when playing with the sample.
+
+  function handleICEGatheringStateChangeEvent() {
+    switch (myPeerConnectionRef.current.iceGatheringState) {
+      case "new":
+        console.log("Signaling state (new): the object was just created.");
+      case "gathering":
+        console.log(
+          "Signaling state (gathering): the ICE agent is in the process of gathering candidates."
+        );
+      case "complete":
+        console.log(
+          "Signaling state (complete): the ICE agent has completed gathering."
+        );
+    }
   }
 
   function callRemoteUser() {
     console.log("calling User");
-    rtcPeerRef.current = createPeer();
-
-    const tracks = cameraStream.getTracks();
-    if (tracks.length) {
-      tracks.forEach((track) => {
-        rtcPeerRef.current.addTrack(track, cameraStream);
+    myPeerConnectionRef.current = createPeer();
+    const localTracks = cameraStream.getTracks();
+    if (localTracks.length) {
+      localTracks.forEach((track) => {
+        // adding a local track to the set of tracks whicl will be transmitted to the other peer
+        // Adding a track to a connection triggers renegotiation by firing a negotiationneeded
+        // where caller's sdp is created and sent to the other peer
+        myPeerConnectionRef.current.addTrack(track, cameraStream);
       });
     }
 
     setIsCalling(true);
   }
 
-  function handleCallEnd() {
+  function handleCloseVideoCall() {
     console.log("ending call");
     // reseting application state
     setIsCalling(false);
     setIsGettingCall(false);
     setIsCallReceived(false);
-    rtcPeerRef.current = null;
+    myPeerConnectionRef.current = null;
     remoteUserIdRef.current = null;
 
     // reseting locals
@@ -227,12 +350,12 @@ const Room = (props) => {
     remoteWebcamVideoElemRef.current = null;
   }
 
-  function endCall() {
+  function closeVideoCall() {
     socketRef.current.emit("call-end", {
       roomID: params.roomID,
       otherUser: remoteUserIdRef.current,
     });
-    handleCallEnd();
+    handleCloseVideoCall();
   }
 
   async function shareScreen() {
@@ -248,7 +371,7 @@ const Room = (props) => {
         },
       });
 
-      rtcRtpsenderRef.current = await rtcPeerRef.current
+      rtcRtpsenderRef.current = await myPeerConnectionRef.current
         .getSenders()
         .find((sender) => sender.track.kind === "video");
 
@@ -315,7 +438,7 @@ const Room = (props) => {
         {isCameraVideoOn ? " Turn off video" : "Turn on video"}
       </button>
       {isGettingCall || isCalling || isCallReceived ? (
-        <div onClick={endCall}>
+        <div onClick={closeVideoCall}>
           <button>End Call</button>
         </div>
       ) : (
